@@ -16,6 +16,8 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+use std::str::FromStr;
+
 
 const LEN_CRC32_TABLE: usize = 0x100;
 
@@ -378,19 +380,22 @@ impl GPTBin {
         assert_eq!(self.header_primary, self.header_backup); // In real world they should not be identical
         assert_eq!(self.entries_primary, self.entries_backup);
         self.header_primary.verify(&self.entries_primary);
+        for i in 0..(self.header_primary.n_entries as usize) {
+            let entry = &self.entries_primary[i];
+            assert_eq!(entry.first_lba % 2048, 0, "partition start does not align at MiB boundary");
+            assert_eq!((entry.last_lba + 1) % 2048, 0, "partition end does not align at MiB boundary");
+        }
     }
 
-    fn to_text(&self) -> String {
-        let mut buffer = String::new();
+    fn to_csv(&self) -> String {
+        let mut buffer = String::from("name,offset_mb,size_mb,flags\n");
         for i in 0..(self.header_primary.n_entries as usize) {
             let entry = &self.entries_primary[i];
             let first_lba = entry.first_lba;
             let off_mb = first_lba / 2048;
-            let size_mb = (entry.last_lba - first_lba) / 2048;
+            let size_mb = (entry.last_lba + 1 - first_lba) / 2048;
             let flags = entry.flags;
-            let uuid_part = entry.uuid_part;
-            let uuid_type = entry.uuid_type;
-            let current = format!("{},{},{},{:08x},{},{}\n", entry.name.to_string(), off_mb, size_mb, flags, uuid_part, uuid_type);
+            let current = format!("{},{},{},0x{:x}\n", entry.name.to_string(), off_mb, size_mb, flags);
             buffer.push_str(&current);
         }
         buffer
@@ -425,7 +430,7 @@ fn main() {
             let p = buffer.as_ptr() as *const GPTBin;
             let gpt_bin = unsafe { p.read_unaligned() };
             gpt_bin.verify();
-            std::fs::write(args.text, gpt_bin.to_text()).expect("Failed to write")
+            std::fs::write(args.text, gpt_bin.to_csv()).expect("Failed to write")
         },
         Action::Apply => {
             println!("Applying '{}' from '{}'", args.blob, args.text)
