@@ -16,9 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-use std::str::FromStr;
-
-
 const LEN_CRC32_TABLE: usize = 0x100;
 
 #[derive(Clone, Copy)]
@@ -242,7 +239,7 @@ impl GPTEntryName {
 }
 
 #[repr(C, packed)]
-#[derive(Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug, Clone)]
 struct GPTEntry {
     uuid_type: uuid::Uuid,
     uuid_part: uuid::Uuid,
@@ -395,10 +392,40 @@ impl GPTBin {
             let off_mb = first_lba / 2048;
             let size_mb = (entry.last_lba + 1 - first_lba) / 2048;
             let flags = entry.flags;
-            let current = format!("{},{},{},0x{:x}\n", entry.name.to_string(), off_mb, size_mb, flags);
+            let current = format!("{},{},{},{:x}\n", entry.name.to_string(), off_mb, size_mb, flags);
             buffer.push_str(&current);
         }
         buffer
+    }
+
+    fn from_csv(csv: &str) -> Self {
+        let mut bin = Self::default();
+        for line in csv.lines().skip(1) {
+            let mut step = 0;
+            for part in line.split(',') {
+                match step {
+                    0 => { /* name */
+
+                    },
+                    1 => { /* off MB */
+
+                    },
+                    2 => { /* size MB */
+
+                    },
+                    3 => { /* flags */
+
+                    },
+                    _ => panic!("Too many fields")
+                }
+
+                step += 1;
+            }
+            assert_eq!(step, 4, "Too few fields")
+        }
+        bin.entries_backup = bin.entries_primary.clone();
+        bin.header_backup = bin.header_backup.clone();
+        bin
     }
 }
 
