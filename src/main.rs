@@ -449,13 +449,14 @@ fn main() {
     match args.action {
         Action::Dump => {
             println!("Dumping '{}' to '{}'", args.blob, args.text);
-            let mut buffer = [0u8; size_of::<GPTBin>()];
-            {
+            let gpt_bin = {
+                let mut gpt_bin = std::mem::MaybeUninit::<GPTBin>::zeroed();
+                let p = gpt_bin.as_mut_ptr() as *mut u8;
+                let buffer = unsafe {std::slice::from_raw_parts_mut(p, size_of::<GPTBin>())};
                 let mut f = std::fs::File::open(args.blob).expect("Failed to open file");
-                std::io::Read::read(&mut f, &mut buffer).expect("Failed to read");
-            }
-            let p = buffer.as_ptr() as *const GPTBin;
-            let gpt_bin = unsafe { p.read_unaligned() };
+                std::io::Read::read(&mut f, buffer).expect("Failed to read");
+                unsafe { gpt_bin.assume_init() }
+            };
             gpt_bin.verify();
             std::fs::write(args.text, gpt_bin.to_csv()).expect("Failed to write")
         },
