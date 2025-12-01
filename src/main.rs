@@ -249,6 +249,53 @@ struct GPTEntry {
     name: GPTEntryName,
 }
 
+const GPT_GUID_BASIC: uuid::Uuid  = uuid::Uuid::from_bytes([0xA2, 0xA0, 0xD0, 0xEB,  0xE5, 0xB9, 0x33, 0x44,  0x87, 0xC0, 0x68, 0xB6,  0xB7, 0x26, 0x99, 0xC7]);
+
+const GPT_FIRST_LBA_0: u64 = 0x12000;
+const GPT_FIRST_LBA_1: u64 = 0x36000;
+const GPT_FIRST_LBA_2: u64 = 0x42000;
+const GPT_FIRST_LBA_3: u64 = 0x47000;
+
+const GPT_LAST_LBA_0: u64 = 0x31FFF;
+const GPT_LAST_LBA_1: u64 = 0x39FFF;
+const GPT_LAST_LBA_2: u64 = 0x42FFF;
+const GPT_LAST_LBA_3: u64 = 0x4AFFF;
+
+const GPT_FLAGS_0: u64 = 0x0;
+const GPT_FLAGS_1: u64 = 0x0;
+const GPT_FLAGS_2: u64 = 0x1000000000000;
+const GPT_FLAGS_3: u64 = 0x11000000000000;
+
+const GPT_NAME_0: &[u8] = b"reserved";
+const GPT_NAME_1: &[u8] = b"env";
+const GPT_NAME_2: &[u8] = b"frp";
+const GPT_NAME_3: &[u8] = b"factory";
+
+impl GPTEntry {
+    fn verify(&self, first_lba: u64, last_lba: u64, flags: u64, name: &[u8]) {
+        let this_first_lba = self.first_lba;
+        let this_last_lba = self.last_lba;
+        let this_flags = self.flags;
+        let this_name = self.name.to_bytes();
+        println!("Verifying {}", String::from_utf8_lossy(&this_name));
+        assert_eq!(this_first_lba, first_lba);
+        assert_eq!(this_last_lba, last_lba);
+        assert_eq!(this_flags, flags);
+        assert_eq!(this_name, name);
+    }
+
+    fn new(uuid_part: Option<uuid::Uuid>, first_lba: u64, last_lba: u64, flags: u64, name: &[u8]) -> Self {
+        Self {
+            uuid_type: GPT_GUID_BASIC.clone(),
+            uuid_part: uuid_part.unwrap_or_default(),
+            first_lba: first_lba,
+            last_lba: last_lba,
+            flags: flags,
+            name: GPTEntryName::from_bytes(name),
+        }
+    }
+}
+
 const LEN_GPT_ENTRY: u32 = size_of::<GPTEntry>() as u32;
 
 const LEN_GPT_SIGNATURE: usize = 8;
@@ -377,8 +424,14 @@ impl GPTBin {
         assert_eq!(self.header_primary, self.header_backup); // In real world they should not be identical
         assert_eq!(self.entries_primary, self.entries_backup);
         self.header_primary.verify(&self.entries_primary);
+        let entries = &self.entries_primary;
+        entries[0].verify(GPT_FIRST_LBA_0, GPT_LAST_LBA_0, GPT_FLAGS_0, GPT_NAME_0);
+        entries[1].verify(GPT_FIRST_LBA_1, GPT_LAST_LBA_1, GPT_FLAGS_1, GPT_NAME_1);
+        entries[2].verify(GPT_FIRST_LBA_2, GPT_LAST_LBA_2, GPT_FLAGS_2, GPT_NAME_2);
+        entries[3].verify(GPT_FIRST_LBA_3, GPT_LAST_LBA_3, GPT_FLAGS_3, GPT_NAME_3);
+        // let part_reserved = self.
         for i in 0..(self.header_primary.n_entries as usize) {
-            let entry = &self.entries_primary[i];
+            let entry = &entries[i];
             assert_eq!(entry.first_lba % 2048, 0, "partition start does not align at MiB boundary");
             assert_eq!((entry.last_lba + 1) % 2048, 0, "partition end does not align at MiB boundary");
         }
