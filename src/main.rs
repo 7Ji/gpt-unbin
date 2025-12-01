@@ -233,7 +233,7 @@ impl GPTEntryName {
         name
     }
 
-    fn from_str(s: &str) -> Self {
+    fn _from_str(s: &str) -> Self {
         Self::from_bytes(s.as_bytes())
     }
 }
@@ -287,7 +287,7 @@ impl GPTEntry {
     fn new(uuid_part: Option<uuid::Uuid>, first_lba: u64, last_lba: u64, flags: u64, name: &[u8]) -> Self {
         Self {
             uuid_type: GPT_GUID_BASIC.clone(),
-            uuid_part: uuid_part.unwrap_or_default(),
+            uuid_part: uuid_part.unwrap_or_else(uuid::Uuid::new_v4),
             first_lba: first_lba,
             last_lba: last_lba,
             flags: flags,
@@ -304,7 +304,7 @@ const GPT_SIGNATURE: [u8; LEN_GPT_SIGNATURE] = [0x45, 0x46, 0x49, 0x20, 0x50, 0x
 const LEN_GPT_REVISION: usize = 4;
 const GPT_REVISION: [u8; LEN_GPT_REVISION] = [0x00, 0x00, 0x01, 0x00];
 
-const GPT_LBA_MAX: u64 = 0xFFFFFFFFFFFFFFFF;
+const GPT_LBA_MAX: u64 = u64::MAX;
 const GPT_LBA_PRIMARY: u64 = 0x1;
 const GPT_LBA_FIRST: u64 = 0x22;
 const GPT_LBA_ENTRIES: u64 = 0x02;
@@ -342,7 +342,7 @@ impl Default for GPTHeader {
             backup_lba: GPT_LBA_MAX,
             first_lba: GPT_LBA_FIRST,
             last_lba: GPT_LBA_MAX,
-            guid: Default::default(),
+            guid: uuid::Uuid::new_v4(),
             entries_lba: GPT_LBA_ENTRIES,
             n_entries: Default::default(),
             sz_entry: LEN_GPT_ENTRY,
@@ -438,14 +438,17 @@ impl GPTBin {
     }
 
     fn to_csv(&self) -> String {
-        let mut buffer = String::from("name,offset_mb,size_mb,flags\n");
-        for i in 0..(self.header_primary.n_entries as usize) {
+        let mut buffer = String::from("name,size_mb,flagx\n");
+        let n_entries = self.header_primary.n_entries as usize;
+        for i in 4..n_entries {
             let entry = &self.entries_primary[i];
-            let first_lba = entry.first_lba;
-            let off_mb = first_lba / 2048;
-            let size_mb = (entry.last_lba + 1 - first_lba) / 2048;
             let flags = entry.flags;
-            let current = format!("{},{},{},{:x}\n", entry.name.to_string(), off_mb, size_mb, flags);
+            let current = if entry.last_lba == GPT_LBA_MAX {
+                format!("{},-,{:x}\n", entry.name.to_string(), flags)
+            } else {
+                let size_mb = (entry.last_lba - entry.first_lba + 1) / 2048;
+                format!("{},{},{:x}\n", entry.name.to_string(), size_mb, flags)
+            };
             buffer.push_str(&current);
         }
         buffer
@@ -453,31 +456,46 @@ impl GPTBin {
 
     fn from_csv(csv: &str) -> Self {
         let mut bin = Self::default();
+        bin.entries_primary[0] = GPTEntry::new(None, GPT_FIRST_LBA_0, GPT_LAST_LBA_0, GPT_FLAGS_0, GPT_NAME_0);
+        bin.entries_primary[1] = GPTEntry::new(None, GPT_FIRST_LBA_1, GPT_LAST_LBA_1, GPT_FLAGS_1, GPT_NAME_1);
+        bin.entries_primary[2] = GPTEntry::new(None, GPT_FIRST_LBA_2, GPT_LAST_LBA_2, GPT_FLAGS_2, GPT_NAME_2);
+        bin.entries_primary[3] = GPTEntry::new(None, GPT_FIRST_LBA_3, GPT_LAST_LBA_3, GPT_FLAGS_3, GPT_NAME_3);
+        let mut last_lba = GPT_LAST_LBA_3;
+        let mut id_entry = 4;
         for line in csv.lines().skip(1) {
             let mut step = 0;
+            let mut name = "";
+            let first_lba = last_lba + 2049;
+            let mut flags = 0u64;
             for part in line.split(',') {
                 match step {
                     0 => { /* name */
-
+                        name = part;
                     },
-                    1 => { /* off MB */
-
+                    1 => { /* size MB */
+                        if part == "-" {
+                            last_lba = GPT_LBA_MAX;
+                        } else {
+                            let size_mb: u64 = part.parse().expect("Failed to parse size MB");
+                            last_lba = first_lba + size_mb * 2048 - 1;
+                        }
                     },
-                    2 => { /* size MB */
-
-                    },
-                    3 => { /* flags */
+                    2 => { /* flags */
+                        flags = u64::from_str_radix(part, 16).expect("Failed to parse flag")
 
                     },
                     _ => panic!("Too many fields")
                 }
-
                 step += 1;
             }
-            assert_eq!(step, 4, "Too few fields")
+            assert_eq!(step, 3, "Too few fields");
+            bin.entries_primary[id_entry] = GPTEntry::new(None, first_lba, last_lba, flags, name.as_bytes());
+            id_entry += 1;
         }
+        bin.header_primary.n_entries = id_entry as u32;
+        bin.header_primary.update(&bin.entries_primary);
         bin.entries_backup = bin.entries_primary.clone();
-        bin.header_backup = bin.header_backup.clone();
+        bin.header_backup = bin.header_primary.clone();
         bin
     }
 }
@@ -514,7 +532,16 @@ fn main() {
             std::fs::write(args.text, gpt_bin.to_csv()).expect("Failed to write")
         },
         Action::Apply => {
-            println!("Applying '{}' from '{}'", args.blob, args.text)
+            println!("Applying '{}' from '{}'", args.blob, args.text);
+            let gpt_bin = {
+                let buffer = std::fs::read_to_string(args.text).expect("Failed to read csv");
+                GPTBin::from_csv(&buffer)
+            };
+            gpt_bin.verify();
+            let p = &gpt_bin as *const GPTBin as *const u8;
+            let buffer = unsafe {std::slice::from_raw_parts(p, size_of::<GPTBin>())};
+            println!("{}", buffer.len());
+            std::fs::write(args.blob, buffer).expect("Failed to write new gpt.bin")
         },
     }
 }
