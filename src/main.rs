@@ -277,7 +277,7 @@ impl GPTEntry {
         let this_last_lba = self.last_lba;
         let this_flags = self.flags;
         let this_name = self.name.to_bytes();
-        println!("Verifying {}", String::from_utf8_lossy(&this_name));
+        println!("Verifying GPT Entry for {}", String::from_utf8_lossy(&this_name));
         assert_eq!(this_first_lba, first_lba);
         assert_eq!(this_last_lba, last_lba);
         assert_eq!(this_flags, flags);
@@ -500,48 +500,81 @@ impl GPTBin {
     }
 }
 
+const HELP_MESSAGE: &str = "
+Usage:
+    gpt-unbin {dump/apply} [gpt.bin blob] [parts info csv]
 
-#[derive(clap::ValueEnum, Clone)]
+E.g. to dump parts into from `out/gpt.bin` to `parts.csv`:
+    gpt-unbin dump out/gpt.bin parts.csv
+E.g. to apply editted parts into back into `out/gpt.bin`:
+    gpt-unbin apply out/gpt.bin parts.csv
+";
+
 enum Action {
     Dump,
     Apply,
 }
 
-#[derive(clap::Parser)]
-#[command(version)]
-struct Args {
-    action: Action,
-    blob: String,
-    text: String,
-}
-
 fn main() {
-    let args: Args = clap::Parser::parse();
-    match args.action {
+    let (action, blob, csv) = {
+        let mut action = None;
+        let mut blob = None;
+        let mut csv = None;
+        for arg in std::env::args().skip(1) {
+            match arg.as_str() {
+                "-h" | "--help" => {
+                    print!("{}", HELP_MESSAGE);
+                    return
+                },
+                "--" => (),
+                _ => {
+                    if action.is_none() {
+                        match arg.as_str() {
+                            "dump" => action = Some(Action::Dump),
+                            "apply" => action = Some(Action::Apply),
+                            _ => panic!("Unkown arg {}, action must be either 'dump' or 'apply'", arg)
+                        }
+                    } else if blob.is_none() {
+                        blob = Some(arg)
+                    } else if csv.is_none() {
+                        csv = Some(arg)
+                    } else {
+                        panic!("Too many arguments")
+                    }
+                }
+            }
+        }
+        (
+            action.expect("No action given, pass -h or --help to check for help message"),
+            blob.expect("No path to gpt.bin blob given, pass -h or --help to check for help message"),
+            csv.expect("No path to parts info csv given, pass -h or --help to check for help message"),
+        )
+    };
+    match action {
         Action::Dump => {
-            println!("Dumping '{}' to '{}'", args.blob, args.text);
+            println!("Dumping '{}' to '{}'", blob, csv);
             let gpt_bin = {
                 let mut gpt_bin = std::mem::MaybeUninit::<GPTBin>::zeroed();
                 let p = gpt_bin.as_mut_ptr() as *mut u8;
                 let buffer = unsafe {std::slice::from_raw_parts_mut(p, size_of::<GPTBin>())};
-                let mut f = std::fs::File::open(args.blob).expect("Failed to open file");
+                let mut f = std::fs::File::open(blob).expect("Failed to open file");
                 std::io::Read::read(&mut f, buffer).expect("Failed to read");
                 unsafe { gpt_bin.assume_init() }
             };
             gpt_bin.verify();
-            std::fs::write(args.text, gpt_bin.to_csv()).expect("Failed to write")
+            std::fs::write(csv, gpt_bin.to_csv()).expect("Failed to write")
         },
         Action::Apply => {
-            println!("Applying '{}' from '{}'", args.blob, args.text);
+            println!("Applying '{}' from '{}'", blob, csv);
             let gpt_bin = {
-                let buffer = std::fs::read_to_string(args.text).expect("Failed to read csv");
+                let buffer = std::fs::read_to_string(csv).expect("Failed to read csv");
                 GPTBin::from_csv(&buffer)
             };
             gpt_bin.verify();
             let p = &gpt_bin as *const GPTBin as *const u8;
             let buffer = unsafe {std::slice::from_raw_parts(p, size_of::<GPTBin>())};
-            println!("{}", buffer.len());
-            std::fs::write(args.blob, buffer).expect("Failed to write new gpt.bin")
+            println!("Wrote {} bytes", buffer.len());
+            std::fs::write(blob, buffer).expect("Failed to write new gpt.bin")
         },
     }
 }
